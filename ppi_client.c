@@ -126,6 +126,20 @@ void ppi_client_cleanup(ppi_client_t *client) {
     }
 }
 
+void build_read_frame(unsigned char *req_1){
+    const unsigned char header[22] = {
+        0x68, 0x1B, 0x1B, 0x68, 0x02, 0x00, 0x6C, 0x32, 
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0E, 0x00, 
+        0x00, 0x04, 0x01, 0x12, 0x0A, 0x10
+    };
+    memcpy(req_1, header, 22);
+}
+
+int ppi_read(char *reg_type, uint16_t addr, uint16_t qty) {
+    unsigned char req_1[33]={0} //第一次发送的报文
+    build_read_frame(req_1);
+}
+
 // 交互式主循环
 void interactive_mode(ppi_client_t *client) {
     char cmd[16];
@@ -138,22 +152,17 @@ void interactive_mode(ppi_client_t *client) {
 
         if (scanf("%s", cmd) <= 0) break;
         if (strcmp(cmd, "r") == 0) { //读
-            // 发送数据
-            if (len > 0) {
-                if (ppi_client_send(client, send_buf, len) < 0) {
-                    fprintf(stderr, "Failed to send data\n");
-                    break;
-                }
+            uint16_t addr, qty;
+            char reg_type[16];
+            printf("Enter Register Type V/M : ");
+            scanf("%s", reg_type);
+            printf("Enter Address: ");
+            scanf("%hu", &addr);
+            printf("Enter Quantity: ");
+            scanf("%hu", &qty);
 
-                // 接收响应
-                int ret = ppi_client_recv(client, recv_buf, sizeof(recv_buf));
-                if (ret < 0) {
-                    fprintf(stderr, "Failed to receive data\n");
-                    break;
-                } else if (ret == 0) {
-                    break;
-                }
-                printf("Server: %s\n", recv_buf);
+            if(ppi_read(reg_type, addr, qty)){
+                //
             }
         } else if (strcmp(cmd, "w") == 0) { //写
 

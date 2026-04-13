@@ -132,9 +132,9 @@ void build_read_frame(unsigned char *req_1){
         0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0E, 0x00, 
         0x00, 0x04, 0x01, 0x12, 0x0A, 0x10,//读命令的前22个字节都是相同的
         0x00,//字节22 读取数据的单位
-        0x00,//字节23 恒0
+        0x00,//字节23
         0x00,//字节24 表示数据个数
-        0x00,//字节25 恒0
+        0x00,//字节25
     };
     memcpy(req_1, header, 26);
 }
@@ -168,7 +168,8 @@ int ppi_read(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t qt
         case 2: req_1[22] = 0x04; break;// word
         case 3: req_1[22] = 0x06; break;// double word
     }
-    req_1[24] = qty;
+    req_1[23] = qty >> 8 & 0xFF;
+    req_1[24] = qty & 0xFF;
     if (reg_type == 1){// 只有读取V存储器的时候这里是0x01，否则是0x00
         req_1[26]=0x01;
         req_1[27]=0x84;
@@ -215,9 +216,73 @@ int ppi_read(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t qt
         printf("Recv failed in res 2\n");
         return -4;
     }
-    if (res_2[21] != 0xFF)return -4
+    if (res_2[21] != 0xFF)return -4;
     parse_res_2(res_2, read_mode, addr);
     return 0;
+}
+
+void build_write_frame(unsigned char *req_1){
+    const unsigned char header[22] = {
+        0x68, 0x20, 0x20, 0x68, 0x02, 0x00, 0x6C, 0x32, 
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0E, 0x00, 
+        0x06, 0x05, 0x01, 0x12, 0x0A, 0x10,//读命令的前22个字节都是相同的
+    };
+    memcpy(req_1, header, 22);
+}
+
+int ppi_write(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t qty, uint16_t write_mode) {
+    unsigned char req_1[37+qty]={0};
+    build_write_frame(req_1);
+    switch (write_mode){
+        case 0: 
+            req_1[22] = 0x01; // bit
+            req_1[23] = 0x00;
+            req_1[24] = 0x01;
+            break;
+        case 1: 
+            req_1[22] = 0x02; // byte
+            req_1[23] = qty >> 8 & 0xFF;
+            req_1[24] = qty & 0xFF;
+            break;
+        case 2: 
+            req_1[22] = 0x04; // word
+            break;
+        case 3: 
+            req_1[22] = 0x06; // double word
+            break;
+    }
+    if (reg_type == 1){// 只有读取V存储器的时候这里是0x01，否则是0x00
+        req_1[26]=0x01;
+        req_1[27]=0x84;
+    } else {
+        req_1[26]=0x00;
+        if (reg_type == 0) req_1[27]=0x83; //M寄存器是83
+        else return -1;
+    }
+
+    uint32_t offset = addr * 8;  // 计算偏移量
+    req_1[28] = (offset >> 16) & 0xFF;
+    req_1[29] = (offset >> 8) & 0xFF;
+    req_1[30] = offset & 0xFF;
+
+    req_1[32] = (write_mode == 0? 0x03 : 0x04);
+    if (write_mode == 0){
+        req_1[33] = 0x00;
+        req_1[34] = 0x01;
+    }else if (write_mode == 1){
+        uint32_t qty_bit = qty*8;
+        req_1[33] = qty_bit >> 8 & 0xFF;
+        req_1[34] = qty_bit & 0xFF;
+    }else return -1;
+    for (int i = 0; i < qty; i++) {
+        printf("Enter value of Reg[%d]: ", addr + i);
+        scanf("%hhu", &req_1[35 + i]);
+    }
+    req_1[35+qty] = calculate_fcs(req_1, 4, 30);  // FCS 校验码
+    req_1[36+qty] = 0x16;  // ED 结束符
+
+    return 0;
+
 }
 
 // 交互式主循环
@@ -231,9 +296,9 @@ void interactive_mode(ppi_client_t *client) {
         fflush(stdout);
 
         if (scanf("%s", cmd) <= 0) break;
-        if (strcmp(cmd, "r") == 0) { //读
-            uint16_t addr, qty, rm, rt;
-            char read_mode[16];
+        if (strcmp(cmd, "r") == 0 || strcmp(cmd, "w") == 0) { //读和写
+            uint16_t addr, qty, m, rt;
+            char mode[16];
             char reg_type[16];
             printf("Enter Register Type M/V : ");
             scanf("%s", reg_type);
@@ -244,20 +309,20 @@ void interactive_mode(ppi_client_t *client) {
                 continue;
             }
 
-            printf("Enter read mode [b]:bit [B]:byte [w]:word [dw]:double word : ");
-            scanf("%s", read_mode);
-            if (strcmp(read_mode, "b") == 0) rm = 0;
-            else if (strcmp(read_mode, "B") == 0) rm = 1;
-            else if (strcmp(read_mode, "w") == 0) rm = 2;
-            else if (strcmp(read_mode, "dw") == 0) rm = 3;
+            printf("Enter mode [b]:bit [B]:byte {[w]:word [dw]:double word/under construction}: ");
+            scanf("%s", mode);
+            if (strcmp(mode, "b") == 0) m = 0;
+            else if (strcmp(mode, "B") == 0) m = 1;
+            else if (strcmp(mode, "w") == 0) m = 2;
+            else if (strcmp(mode, "dw") == 0) m = 3;
             else {
-                printf("Unknown read mode: %s\n", read_mode);
+                printf("Unknown mode: %s\n", mode);
                 continue;
             }
 
             printf("Enter Address: ");
             scanf("%hu", &addr);
-            if (rm != 0){
+            if (m != 0){
                 printf("Enter quantity: ");
                 scanf("%hu", &qty);
             }else qty = 1;
@@ -267,19 +332,22 @@ void interactive_mode(ppi_client_t *client) {
                 continue;
             }
 
-            int ret = ppi_read(client, rt, addr, qty, rm);
-            if(ret == -1){
-                printf("Read failed in req 1\n");
-            }else if (ret == -2) {
-                printf("Read failed in res 1\n");
-            }else if (ret == -3) {
-                printf("Read failed in req 2\n");
-            }else if (ret == -4) {
-                printf("Read failed in res 2\n");
-            }else {//成功，目前这里没东西
-
+            if (strcmp(cmd, "r") == 0){
+                int ret = ppi_read(client, rt, addr, qty, m);
+                if(ret == -1){
+                    printf("Read failed in req 1\n");
+                }else if (ret == -2) {
+                    printf("Read failed in res 1\n");
+                }else if (ret == -3) {
+                    printf("Read failed in req 2\n");
+                }else if (ret == -4) {
+                    printf("Read failed in res 2\n");
+                }else {//成功，目前这里没东西
+                
+                }
+            }else if (strcmp(cmd, "w") == 0){
+                int ret = ppi_write(client, rt, addr, qty, m);
             }
-        } else if (strcmp(cmd, "w") == 0) { //写
 
         } else if (strcmp(cmd, "q") == 0) { //退出
             break;

@@ -147,13 +147,25 @@ unsigned char calculate_fcs(const unsigned char *data, int start, int end) {
     return fcs;
 }
 
-int parse_res_2(unsigned char *res_2, uint16_t read_mode, uint16_t addr) {
+int parse_res_2_read(unsigned char *res_2, uint16_t read_mode, uint16_t addr) {
     if (read_mode == 0){
         printf("Reg[%d]: %d\n", addr, res_2[25] & 0x01);
     }else{
         uint16_t len = (res_2[23]<<8 | res_2[24])/8;
-        for(int i = 25; i < 25+len; i++){
-            printf("Reg[%d]: %02X\n", addr+i-25, res_2[i]);
+        if (read_mode == 1) {
+            for(int i = 25; i < 25+len; i++){
+                printf("Reg[%d]: %u\n", addr+i-25, res_2[i]);
+            }
+        } else if (read_mode == 2) {
+            for(int i = 25; i < 25+len; i+=2){
+                uint16_t value = (res_2[i+1] << 8) | res_2[i];
+                printf("Reg[%d]: %u\n", addr+(i-25)/2, value);
+            }
+        } else if (read_mode == 3) {
+            for(int i = 25; i < 25+len; i+=4){
+                uint32_t value = (res_2[i+3] << 24) | (res_2[i+2] << 16) | (res_2[i+1] << 8) | res_2[i];
+                printf("Reg[%d]: %u\n", addr+(i-25)/4, value);
+            }
         }
     }
     return 0;
@@ -210,29 +222,35 @@ int ppi_read(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t qt
         return -3;
     }
 
-    unsigned char res_2[256];
+    unsigned char res_2[256];//第二次返回，这里还很粗糙，就是找到ff然后就解数据去了
     int recv_len2 = ppi_client_recv(client, (char *)res_2, sizeof(res_2));
     if(recv_len2 == -1){
         printf("Recv failed in res 2\n");
         return -4;
     }
     if (res_2[21] != 0xFF)return -4;
-    parse_res_2(res_2, read_mode, addr);
+    parse_res_2_read(res_2, read_mode, addr);
     return 0;
 }
 
-void build_write_frame(unsigned char *req_1){
+void build_write_frame(unsigned char *req_1, uint16_t qty){
+    uint16_t len = 31+qty;
     const unsigned char header[22] = {
-        0x68, 0x20, 0x20, 0x68, 0x02, 0x00, 0x6C, 0x32, 
+        0x68, 0x20, 0x20, 0x68, 0x02, 0x00, 0x6C, 0x32, //这里的6C不太确定，文档里是6C但是hsl里是7C
         0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0E, 0x00, 
         0x06, 0x05, 0x01, 0x12, 0x0A, 0x10,//读命令的前22个字节都是相同的
     };
     memcpy(req_1, header, 22);
+    req_1[1] = len & 0xFF;
+    req_1[2] = len & 0xFF;
+    req_1[15] = (4+qty) >> 8 & 0xFF;
+    req_1[16] = (4+qty) & 0xFF;
 }
 
 int ppi_write(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t qty, uint16_t write_mode) {
-    unsigned char req_1[37+qty]={0};
-    build_write_frame(req_1);
+    unsigned char req_1[37+qty];
+    memset(req_1, 0, sizeof(req_1));
+    build_write_frame(req_1, qty);
     switch (write_mode){
         case 0: 
             req_1[22] = 0x01; // bit
@@ -278,9 +296,40 @@ int ppi_write(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t q
         printf("Enter value of Reg[%d]: ", addr + i);
         scanf("%hhu", &req_1[35 + i]);
     }
-    req_1[35+qty] = calculate_fcs(req_1, 4, 30);  // FCS 校验码
+    req_1[35+qty] = calculate_fcs(req_1, 4, 34+qty);  // FCS 校验码
     req_1[36+qty] = 0x16;  // ED 结束符
+    if(ppi_client_send(client, (const char *)req_1, 37+qty) == -1){
+        printf("Send failed in req 1\n");
+        return -1;
+    }
 
+    // 接收第一个响应字节（应该是 0xE5）
+    unsigned char res_1;
+    int recv_len = ppi_client_recv(client, (char *)&res_1, 2);
+    if (recv_len <= 0 || res_1 != 0xE5){
+        printf("Invalid response: expected 0xE5, got 0x%02X\n", res_1);
+        return -2;
+    }
+
+    unsigned char req_2[6];
+    req_2[0] = 0x10; //固定的
+    req_2[1] = 0x02; //主机地址
+    req_2[2] = 0x00; //PLC地址
+    req_2[3] = 0x5C; //固定
+    req_2[4] = calculate_fcs(req_2, 1, 3);
+    req_2[5] = 0x16; //固定
+    if(ppi_client_send(client, (const char *)req_2, 6) == -1){
+        printf("Send failed in req 2\n");
+        return -3;
+    }
+
+    unsigned char res_2[25]={0};
+    int recv_len2 = ppi_client_recv(client, (char *)res_2, sizeof(res_2));
+    if(recv_len2 == -1){
+        printf("Recv failed in res 2\n");
+        return -4;
+    }
+    if (res_2[21] != 0xFF || res_2[22] != calculate_fcs(res_2, 4, 20) )return -4;
     return 0;
 
 }
@@ -332,7 +381,7 @@ void interactive_mode(ppi_client_t *client) {
                 continue;
             }
 
-            if (strcmp(cmd, "r") == 0){
+            if (strcmp(cmd, "r") == 0){//读
                 int ret = ppi_read(client, rt, addr, qty, m);
                 if(ret == -1){
                     printf("Read failed in req 1\n");
@@ -345,8 +394,19 @@ void interactive_mode(ppi_client_t *client) {
                 }else {//成功，目前这里没东西
                 
                 }
-            }else if (strcmp(cmd, "w") == 0){
+            }else if (strcmp(cmd, "w") == 0){//写
                 int ret = ppi_write(client, rt, addr, qty, m);
+                if(ret == -1){
+                    printf("Write failed in req 1\n");
+                }else if (ret == -2) {
+                    printf("Write failed in res 1\n");
+                }else if (ret == -3) {
+                    printf("Write failed in req 2\n");
+                }else if (ret == -4) {
+                    printf("Write failed in res 2\n");
+                }else {
+                    printf("Write successful\n");
+                }
             }
 
         } else if (strcmp(cmd, "q") == 0) { //退出

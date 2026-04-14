@@ -178,7 +178,7 @@ int ppi_read(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t qt
         case 0: req_1[22] = 0x01; break;// bit
         case 1: req_1[22] = 0x02; break;// byte
         case 2: req_1[22] = 0x04; break;// word
-        case 3: req_1[22] = 0x06; break;// double word
+        case 4: req_1[22] = 0x06; break;// double word
     }
     req_1[23] = qty >> 8 & 0xFF;
     req_1[24] = qty & 0xFF;
@@ -248,7 +248,7 @@ void build_write_frame(unsigned char *req_1, uint16_t qty){
 }
 
 int ppi_write(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t qty, uint16_t write_mode) {
-    unsigned char req_1[37+qty];
+    unsigned char req_1[37+qty*write_mode];
     memset(req_1, 0, sizeof(req_1));
     build_write_frame(req_1, qty);
     switch (write_mode){
@@ -267,7 +267,7 @@ int ppi_write(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t q
             req_1[23] = qty >> 8 & 0xFF;
             req_1[24] = qty & 0xFF;
             break;
-        case 3: 
+        case 4: 
             req_1[22] = 0x06; // double word
             req_1[23] = qty >> 8 & 0xFF;
             req_1[24] = qty & 0xFF;
@@ -299,18 +299,38 @@ int ppi_write(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t q
         uint32_t qty_bit = qty*16;
         req_1[33] = qty_bit >> 8 & 0xFF;
         req_1[34] = qty_bit & 0xFF;
-    }else if (write_mode == 3){
+    }else if (write_mode == 4){
         uint32_t qty_bit = qty*32;
         req_1[33] = qty_bit >> 8 & 0xFF;
         req_1[34] = qty_bit & 0xFF;
     }else return -1;
-    
-    for (int i = 0; i < qty; i++) {
-        printf("Enter value of Reg[%d]: ", addr + i);
-        scanf("%hhu", &req_1[35 + i]);
+
+    if (write_mode == 0 || write_mode == 1){
+        for (int i = 0; i < qty; i++) {
+            printf("Enter value of Reg[%d]: ", addr + i);
+            scanf("%hhu", &req_1[35 + i]);
+        }
+    }else if (write_mode == 2){
+        for (int i = 0; i < qty; i++) {
+            uint16_t value;
+            printf("Enter value of Reg[%d]: ", addr + i);
+            scanf("%hu", &value);
+            req_1[35 + i*2 + 1] = value >> 8 & 0xFF;
+            req_1[35 + i*2] = value & 0xFF;
+        }
+    }else if (write_mode == 4){
+        for (int i = 0; i < qty; i++) {
+            uint32_t value;
+            printf("Enter value of Reg[%d]: ", addr + i);
+            scanf("%u", &value);
+            req_1[35 + i*4 + 3] = value >> 24 & 0xFF;
+            req_1[35 + i*4 + 2] = value >> 16 & 0xFF;
+            req_1[35 + i*4 + 1] = value >> 8 & 0xFF;
+            req_1[35 + i*4] = value & 0xFF;
+        }
     }
-    req_1[35+qty] = calculate_fcs(req_1, 4, 34+qty);  // FCS 校验码
-    req_1[36+qty] = 0x16;  // ED 结束符
+    req_1[35+qty*write_mode] = calculate_fcs(req_1, 4, 34+qty);  // FCS 校验码
+    req_1[36+qty*write_mode] = 0x16;  // ED 结束符
     if(ppi_client_send(client, (const char *)req_1, 37+qty) == -1){
         printf("Send failed in req 1\n");
         return -1;
@@ -376,7 +396,7 @@ void interactive_mode(ppi_client_t *client) {
             if (strcmp(mode, "b") == 0) m = 0;
             else if (strcmp(mode, "B") == 0) m = 1;
             else if (strcmp(mode, "w") == 0) m = 2;
-            else if (strcmp(mode, "dw") == 0) m = 3;
+            else if (strcmp(mode, "dw") == 0) m = 4;
             else {
                 printf("Unknown mode: %s\n", mode);
                 continue;

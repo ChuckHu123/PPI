@@ -161,7 +161,7 @@ int parse_res_2_read(unsigned char *res_2, uint16_t read_mode, uint16_t addr) {
                 uint16_t value = (res_2[i+1] << 8) | res_2[i];
                 printf("Reg[%d]: %u\n", addr+(i-25)/2, value);
             }
-        } else if (read_mode == 3) {
+        } else if (read_mode == 3) {//这里不太对劲，server返回的长度只有w的一半
             for(int i = 25; i < 25+len; i+=4){
                 uint32_t value = (res_2[i+3] << 24) | (res_2[i+2] << 16) | (res_2[i+1] << 8) | res_2[i];
                 printf("Reg[%d]: %u\n", addr+(i-25)/4, value);
@@ -264,9 +264,13 @@ int ppi_write(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t q
             break;
         case 2: 
             req_1[22] = 0x04; // word
+            req_1[23] = qty >> 8 & 0xFF;
+            req_1[24] = qty & 0xFF;
             break;
         case 3: 
             req_1[22] = 0x06; // double word
+            req_1[23] = qty >> 8 & 0xFF;
+            req_1[24] = qty & 0xFF;
             break;
     }
     if (reg_type == 1){// 只有读取V存储器的时候这里是0x01，否则是0x00
@@ -291,7 +295,16 @@ int ppi_write(ppi_client_t *client, uint16_t reg_type, uint16_t addr, uint16_t q
         uint32_t qty_bit = qty*8;
         req_1[33] = qty_bit >> 8 & 0xFF;
         req_1[34] = qty_bit & 0xFF;
+    }else if (write_mode == 2){
+        uint32_t qty_bit = qty*16;
+        req_1[33] = qty_bit >> 8 & 0xFF;
+        req_1[34] = qty_bit & 0xFF;
+    }else if (write_mode == 3){
+        uint32_t qty_bit = qty*32;
+        req_1[33] = qty_bit >> 8 & 0xFF;
+        req_1[34] = qty_bit & 0xFF;
     }else return -1;
+    
     for (int i = 0; i < qty; i++) {
         printf("Enter value of Reg[%d]: ", addr + i);
         scanf("%hhu", &req_1[35 + i]);
@@ -358,7 +371,7 @@ void interactive_mode(ppi_client_t *client) {
                 continue;
             }
 
-            printf("Enter mode [b]:bit [B]:byte {[w]:word [dw]:double word/under construction}: ");
+            printf("Enter mode [b]:bit [B]:byte [w]:word {[dw]/under construction}: ");
             scanf("%s", mode);
             if (strcmp(mode, "b") == 0) m = 0;
             else if (strcmp(mode, "B") == 0) m = 1;

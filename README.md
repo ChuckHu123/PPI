@@ -1,6 +1,5 @@
 # PPI Client
-开发中。。。
-
+为了实习后续开发PPI协议相关内容，先通过这个项目熟悉一下协议（实习相关的ppi与s7转换可以看internship目录）
 简易的 TCP PPI 客户端,用于与server 进行通信。
 
 ## 运行
